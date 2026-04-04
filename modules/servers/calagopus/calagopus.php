@@ -382,7 +382,7 @@ function calagopus_CreateAccount(array $params): string
             }
 
             $serverPayload['node_uuid'] = $nodeUuid;
-            $serverPayload['allocation_uuids'] = [$allocations[0]['uuid']];
+            $serverPayload['allocation_uuid'] = $allocations[0]['uuid'];
 
             $server = $api->createServer($serverPayload);
         } else {
@@ -392,7 +392,6 @@ function calagopus_CreateAccount(array $params): string
                 'location_uuids' => $locations,
                 'allow_overallocation' => false,
             ];
-            $serverPayload['allocation_uuids'] = $serverPayload['allocation_uuids'] ?? [];
 
             $server = $api->deployServer($serverPayload);
         }
