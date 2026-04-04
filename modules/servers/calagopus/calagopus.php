@@ -299,7 +299,7 @@ function calagopus_CreateAccount(array $params): string
     try {
         $api = calagopus_API($params);
 
-        $externalUserId = 'whmcs-' . $params['clientsdetails']['userid'];
+        $externalUserId = (string) $params['clientsdetails']['userid'];
         $username = calagopus_GenerateUsername($params);
 
         $user = $api->findOrCreateUser(
@@ -347,7 +347,7 @@ function calagopus_CreateAccount(array $params): string
             'egg_uuid' => $eggUuid,
             'start_on_completion' => calagopus_Cfg($params, 21, 'on') === 'on',
             'skip_installer' => calagopus_Cfg($params, 20) === 'on',
-            'external_id' => 'whmcs-' . $params['serviceid'],
+            'external_id' => (string) $params['serviceid'],
             'name' => $serverName,
             'limits' => [
                 'cpu'             => (int) calagopus_Cfg($params, 8, '100'),
@@ -630,7 +630,7 @@ function calagopus_GetServerUuid(CalagopusAPI $api, array $params): ?string
     }
 
     // Fallback: look up by external ID
-    $externalId = 'whmcs-' . $params['serviceid'];
+    $externalId = (string) $params['serviceid'];
     $server = $api->getServerByExternalId($externalId);
 
     return $server['uuid'] ?? null;
