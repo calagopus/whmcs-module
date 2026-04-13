@@ -95,11 +95,17 @@ function calagopus_ParseVariables(string $raw): array
 function calagopus_GenerateUsername(array $params): string
 {
     $base = preg_replace('/[^a-zA-Z0-9_]/', '', $params['clientsdetails']['firstname'] . $params['clientsdetails']['lastname']);
+    
     if (strlen($base) < 3) {
         $base = 'user';
     }
-    $base = substr($base, 0, 12);
-    return strtolower($base) . '_' . $params['clientsdetails']['userid'];
+
+    $userId = (string)$params['clientsdetails']['userid'];
+    
+    $maxBaseLength = max(0, 14 - strlen($userId));
+    $truncatedBase = substr($base, 0, $maxBaseLength);
+
+    return strtolower($truncatedBase) . '_' . $userId;
 }
 
 function calagopus_MetaData(): array
