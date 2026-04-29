@@ -95,13 +95,13 @@ function calagopus_ParseVariables(string $raw): array
 function calagopus_GenerateUsername(array $params): string
 {
     $base = preg_replace('/[^a-zA-Z0-9_]/', '', $params['clientsdetails']['firstname'] . $params['clientsdetails']['lastname']);
-    
+
     if (strlen($base) < 3) {
         $base = 'user';
     }
 
     $userId = (string)$params['clientsdetails']['userid'];
-    
+
     $maxBaseLength = max(0, 14 - strlen($userId));
     $truncatedBase = substr($base, 0, $maxBaseLength);
 
@@ -324,7 +324,10 @@ function calagopus_CreateAccount(array $params): string
         $egg = $api->getEgg($nestUuid, $eggUuid);
 
         $dockerImage = calagopus_Cfg($params, 16) ?: (array_values($egg['docker_images'])[0] ?? '');
-        $startup = calagopus_Cfg($params, 17) ?: $egg['startup'];
+        $startup = calagopus_Cfg($params, 17) ?: (isset($egg['startup'])
+            ? $egg['startup'] : (isset($egg['startup_commands']['Default'])
+                ? $egg['startup_commands']['Default']
+                : (array_values($egg['startup_commands'])[0] ?? '')));
 
         $prefix = calagopus_Cfg($params, 18);
         $serverName = ($prefix ? $prefix : 'Server-') . $params['serviceid'];
