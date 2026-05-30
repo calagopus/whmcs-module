@@ -350,9 +350,11 @@ function calagopus_TestConnection(array $params): array
 {
     try {
         $api = calagopus_API($params);
-        $api->getLocations();
+        $result = $api->getLocations();
+        logModuleCall('calagopus', 'TestConnection', ['hostname' => $params['serverhostname']], $result, null, [$params['serverpassword']]);
         return ['success' => true, 'error' => ''];
     } catch (\Exception $e) {
+        logModuleCall('calagopus', 'TestConnection', ['hostname' => $params['serverhostname']], $e->getMessage(), $e->getTraceAsString(), [$params['serverpassword']]);
         return ['success' => false, 'error' => $e->getMessage()];
     }
 }

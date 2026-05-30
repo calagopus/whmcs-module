@@ -64,6 +64,11 @@ class CalagopusAPI
             $url .= '?' . http_build_query($query);
         }
 
+        $requestInfo = ['method' => $method, 'url' => $url];
+        if (!empty($data)) {
+            $requestInfo['body'] = $data;
+        }
+
         $ch = curl_init();
 
         curl_setopt_array($ch, [
@@ -88,10 +93,13 @@ class CalagopusAPI
         curl_close($ch);
 
         if ($error) {
+            \logModuleCall('calagopus', $method . ' ' . $endpoint, $requestInfo, 'cURL Error: ' . $error, null, [$this->apiKey]);
             throw new \Exception('cURL Error: ' . $error);
         }
 
         $decoded = json_decode($response, true);
+
+        \logModuleCall('calagopus', $method . ' ' . $endpoint, $requestInfo, $response, $decoded, [$this->apiKey]);
 
         if ($httpCode >= 400) {
             $errorMsg = 'API Error (HTTP ' . $httpCode . ')';
