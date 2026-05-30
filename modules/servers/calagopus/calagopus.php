@@ -125,6 +125,7 @@ function calagopus_MetaData(): array
 
 function calagopus_ConfigOptions(): array
 {
+    // Note: WHMCS enforces a hard limit of 24 ConfigOptions per module.
     return [
         'nest_uuid' => [
             'FriendlyName' => 'Nest UUID',
@@ -270,13 +271,6 @@ function calagopus_ConfigOptions(): array
             'Default' => '',
             'Description' => 'Allow access to /dev/kvm inside the container.',
         ],
-        'pinned_cpus' => [
-            'FriendlyName' => 'Pinned CPUs (optional)',
-            'Type' => 'text',
-            'Size' => 30,
-            'Default' => '',
-            'Description' => 'Comma-separated CPU core IDs to pin. E.g. "0,1,2"',
-        ],
     ];
 }
 
@@ -291,13 +285,14 @@ function calagopus_TestConnection(array $params): array
     }
 }
 
+// WHMCS enforces a hard limit of 24 ConfigOptions per module.
 //  1=nest_uuid  2=egg_uuid  3=node_uuid  4=location_uuids
 //  5=memory  6=swap  7=disk  8=cpu  9=memory_overhead  10=io_weight
 // 11=allocations_limit  12=database_limit  13=backup_limit  14=schedule_limit
 // 15=custom_feature_limits  16=docker_image  17=startup_command
 // 18=server_name_prefix  19=variables  20=skip_installer
 // 21=start_on_completion  22=backup_configuration_uuid
-// 23=hugepages_passthrough  24=kvm_passthrough  25=pinned_cpus
+// 23=hugepages_passthrough  24=kvm_passthrough
 
 function calagopus_Cfg(array $params, int $n, $default = ''): string
 {
