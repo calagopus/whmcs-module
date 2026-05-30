@@ -274,6 +274,78 @@ function calagopus_ConfigOptions(): array
     ];
 }
 
+/**
+ * Called by WHMCS when an admin saves module settings on the product configuration page.
+ * Throw an exception to abort the save with a user-visible validation error.
+ */
+function calagopus_config_validate(array $params)
+{
+    $errors = [];
+
+    // Required: Nest UUID and Egg UUID must always be set.
+    if (empty(calagopus_Cfg($params, 1))) {
+        $errors[] = 'Nest UUID is required.';
+    }
+    if (empty(calagopus_Cfg($params, 2))) {
+        $errors[] = 'Egg UUID is required.';
+    }
+
+    // Required: at least one of Node UUID or Location UUIDs must be provided.
+    if (empty(calagopus_Cfg($params, 3)) && empty(calagopus_Cfg($params, 4))) {
+        $errors[] = 'Either Node UUID or Location UUIDs (deploy mode) must be provided.';
+    }
+
+    // Required numeric resource fields.
+    $memory = calagopus_Cfg($params, 5, '1024');
+    if (!is_numeric($memory) || (int) $memory <= 0) {
+        $errors[] = 'Memory must be a positive integer (MB).';
+    }
+
+    $disk = calagopus_Cfg($params, 7, '10240');
+    if (!is_numeric($disk) || (int) $disk <= 0) {
+        $errors[] = 'Disk must be a positive integer (MB).';
+    }
+
+    $cpu = calagopus_Cfg($params, 8, '100');
+    if (!is_numeric($cpu) || (int) $cpu < 0) {
+        $errors[] = 'CPU limit must be a non-negative integer.';
+    }
+
+    // Optional numeric fields — validate format only if a value is provided.
+    $swap = calagopus_Cfg($params, 6);
+    if ($swap !== '' && (!is_numeric($swap) || (int) $swap < 0)) {
+        $errors[] = 'Swap must be a non-negative integer (MB).';
+    }
+
+    $memOverhead = calagopus_Cfg($params, 9);
+    if ($memOverhead !== '' && (!is_numeric($memOverhead) || (int) $memOverhead < 0)) {
+        $errors[] = 'Memory Overhead must be a non-negative integer (MB).';
+    }
+
+    $ioWeight = calagopus_Cfg($params, 10);
+    if ($ioWeight !== '' && (!is_numeric($ioWeight) || (int) $ioWeight < 10 || (int) $ioWeight > 1000)) {
+        $errors[] = 'IO Weight must be an integer between 10 and 1000.';
+    }
+
+    foreach ([11 => 'Allocation Limit', 12 => 'Database Limit', 13 => 'Backup Limit', 14 => 'Schedule Limit'] as $n => $label) {
+        $val = calagopus_Cfg($params, $n);
+        if ($val !== '' && (!is_numeric($val) || (int) $val < 0)) {
+            $errors[] = $label . ' must be a non-negative integer.';
+        }
+    }
+
+    if (!empty($errors)) {
+        throw new \Exception(implode(' ', $errors));
+    }
+
+    logModuleCall('calagopus', 'config_validate', [
+        'nest_uuid'       => calagopus_Cfg($params, 1),
+        'egg_uuid'        => calagopus_Cfg($params, 2),
+        'node_uuid'       => calagopus_Cfg($params, 3),
+        'location_uuids'  => calagopus_Cfg($params, 4),
+    ], 'passed', null, [$params['serverpassword'] ?? '']);
+}
+
 function calagopus_TestConnection(array $params): array
 {
     try {
