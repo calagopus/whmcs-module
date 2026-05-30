@@ -125,6 +125,7 @@ function calagopus_MetaData(): array
 
 function calagopus_ConfigOptions(): array
 {
+    // Note: WHMCS enforces a hard limit of 24 ConfigOptions per module.
     return [
         'nest_uuid' => [
             'FriendlyName' => 'Nest UUID',
@@ -270,34 +271,102 @@ function calagopus_ConfigOptions(): array
             'Default' => '',
             'Description' => 'Allow access to /dev/kvm inside the container.',
         ],
-        'pinned_cpus' => [
-            'FriendlyName' => 'Pinned CPUs (optional)',
-            'Type' => 'text',
-            'Size' => 30,
-            'Default' => '',
-            'Description' => 'Comma-separated CPU core IDs to pin. E.g. "0,1,2"',
-        ],
     ];
+}
+
+/**
+ * Called by WHMCS when an admin saves module settings on the product configuration page.
+ * Throw an exception to abort the save with a user-visible validation error.
+ */
+function calagopus_config_validate(array $params)
+{
+    $errors = [];
+
+    // Required: Nest UUID and Egg UUID must always be set.
+    if (empty(calagopus_Cfg($params, 1))) {
+        $errors[] = 'Nest UUID is required.';
+    }
+    if (empty(calagopus_Cfg($params, 2))) {
+        $errors[] = 'Egg UUID is required.';
+    }
+
+    // Required: at least one of Node UUID or Location UUIDs must be provided.
+    if (empty(calagopus_Cfg($params, 3)) && empty(calagopus_Cfg($params, 4))) {
+        $errors[] = 'Either Node UUID or Location UUIDs (deploy mode) must be provided.';
+    }
+
+    // Required numeric resource fields.
+    $memory = calagopus_Cfg($params, 5, '1024');
+    if (!is_numeric($memory) || (int) $memory <= 0) {
+        $errors[] = 'Memory must be a positive integer (MB).';
+    }
+
+    $disk = calagopus_Cfg($params, 7, '10240');
+    if (!is_numeric($disk) || (int) $disk <= 0) {
+        $errors[] = 'Disk must be a positive integer (MB).';
+    }
+
+    $cpu = calagopus_Cfg($params, 8, '100');
+    if (!is_numeric($cpu) || (int) $cpu < 0) {
+        $errors[] = 'CPU limit must be a non-negative integer.';
+    }
+
+    // Optional numeric fields — validate format only if a value is provided.
+    $swap = calagopus_Cfg($params, 6);
+    if ($swap !== '' && (!is_numeric($swap) || (int) $swap < 0)) {
+        $errors[] = 'Swap must be a non-negative integer (MB).';
+    }
+
+    $memOverhead = calagopus_Cfg($params, 9);
+    if ($memOverhead !== '' && (!is_numeric($memOverhead) || (int) $memOverhead < 0)) {
+        $errors[] = 'Memory Overhead must be a non-negative integer (MB).';
+    }
+
+    $ioWeight = calagopus_Cfg($params, 10);
+    if ($ioWeight !== '' && (!is_numeric($ioWeight) || (int) $ioWeight < 10 || (int) $ioWeight > 1000)) {
+        $errors[] = 'IO Weight must be an integer between 10 and 1000.';
+    }
+
+    foreach ([11 => 'Allocation Limit', 12 => 'Database Limit', 13 => 'Backup Limit', 14 => 'Schedule Limit'] as $n => $label) {
+        $val = calagopus_Cfg($params, $n);
+        if ($val !== '' && (!is_numeric($val) || (int) $val < 0)) {
+            $errors[] = $label . ' must be a non-negative integer.';
+        }
+    }
+
+    if (!empty($errors)) {
+        throw new \Exception(implode(' ', $errors));
+    }
+
+    logModuleCall('calagopus', 'config_validate', [
+        'nest_uuid'       => calagopus_Cfg($params, 1),
+        'egg_uuid'        => calagopus_Cfg($params, 2),
+        'node_uuid'       => calagopus_Cfg($params, 3),
+        'location_uuids'  => calagopus_Cfg($params, 4),
+    ], 'passed', null, [$params['serverpassword'] ?? '']);
 }
 
 function calagopus_TestConnection(array $params): array
 {
     try {
         $api = calagopus_API($params);
-        $api->getLocations();
+        $result = $api->getLocations();
+        logModuleCall('calagopus', 'TestConnection', ['hostname' => $params['serverhostname']], $result, null, [$params['serverpassword']]);
         return ['success' => true, 'error' => ''];
     } catch (\Exception $e) {
+        logModuleCall('calagopus', 'TestConnection', ['hostname' => $params['serverhostname']], $e->getMessage(), $e->getTraceAsString(), [$params['serverpassword']]);
         return ['success' => false, 'error' => $e->getMessage()];
     }
 }
 
+// WHMCS enforces a hard limit of 24 ConfigOptions per module.
 //  1=nest_uuid  2=egg_uuid  3=node_uuid  4=location_uuids
 //  5=memory  6=swap  7=disk  8=cpu  9=memory_overhead  10=io_weight
 // 11=allocations_limit  12=database_limit  13=backup_limit  14=schedule_limit
 // 15=custom_feature_limits  16=docker_image  17=startup_command
 // 18=server_name_prefix  19=variables  20=skip_installer
 // 21=start_on_completion  22=backup_configuration_uuid
-// 23=hugepages_passthrough  24=kvm_passthrough  25=pinned_cpus
+// 23=hugepages_passthrough  24=kvm_passthrough
 
 function calagopus_Cfg(array $params, int $n, $default = ''): string
 {
