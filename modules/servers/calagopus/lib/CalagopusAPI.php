@@ -182,6 +182,7 @@ class CalagopusAPI
                 'name_first' => $firstName,
                 'name_last' => $lastName,
                 'admin' => false,
+                'send_email' => true,
                 'language' => 'en',
             ]);
         } catch (\Exception $e) {
