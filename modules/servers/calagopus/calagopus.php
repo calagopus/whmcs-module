@@ -311,7 +311,7 @@ function calagopus_config_validate(array $params)
         $errors[] = 'CPU limit must be a non-negative integer.';
     }
 
-    // Optional numeric fields — validate format only if a value is provided.
+    // Optional numeric fields - validate format only if a value is provided.
     $swap = calagopus_Cfg($params, 6);
     if ($swap !== '' && (!is_numeric($swap) || (int) $swap < 0)) {
         $errors[] = 'Swap must be a non-negative integer (MB).';
@@ -373,12 +373,169 @@ function calagopus_Cfg(array $params, int $n, $default = ''): string
     return trim($params['configoption' . $n] ?? $default);
 }
 
+/**
+ * Find a per-service override in the order WHMCS exposes them:
+ * configurable options first, then custom fields. Each source is
+ * checked against every provided name. Empty values are ignored.
+ */
+function calagopus_FindOverride(array $params, array $names): ?string
+{
+    foreach ([$params['configoptions'] ?? [], $params['customfields'] ?? []] as $source) {
+        foreach ($names as $name) {
+            if ($name !== null && $name !== '' && isset($source[$name]) && trim((string) $source[$name]) !== '') {
+                return trim((string) $source[$name]);
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Resolve a module setting, allowing it to be overwritten per service.
+ *
+ * Priority: configurable option (FriendlyName, then key) → custom field
+ * (FriendlyName, then key) → product config option → default.
+ *
+ * Keys that are not part of calagopus_ConfigOptions() (e.g. "pinned_cpus",
+ * "server_name") can still be supplied via configurable options or custom
+ * fields; they simply have no product-level fallback.
+ */
+function calagopus_GetOption(array $params, string $key, $default = ''): string
+{
+    $options = calagopus_ConfigOptions();
+
+    $override = calagopus_FindOverride($params, [$options[$key]['FriendlyName'] ?? null, $key]);
+    if ($override !== null) {
+        return $override;
+    }
+
+    $index = array_search($key, array_keys($options), true);
+    if ($index !== false) {
+        $value = trim((string) ($params['configoption' . ($index + 1)] ?? ''));
+        if ($value !== '') {
+            return $value;
+        }
+    }
+
+    return trim((string) $default);
+}
+
+/**
+ * Resolve a yes/no setting. WHMCS sends "on" for checked product options,
+ * while configurable options and custom fields commonly carry "1"/"yes"/"true".
+ */
+function calagopus_OptionEnabled(array $params, string $key): bool
+{
+    return in_array(strtolower(calagopus_GetOption($params, $key)), ['on', '1', 'yes', 'true'], true);
+}
+
+function calagopus_ParsePinnedCpus(string $raw): array
+{
+    return array_map('intval', array_filter(array_map('trim', explode(',', $raw)), 'is_numeric'));
+}
+
+function calagopus_BuildLimits(array $params): array
+{
+    $limits = [
+        'cpu'             => (int) calagopus_GetOption($params, 'cpu', '100'),
+        'memory'          => (int) calagopus_GetOption($params, 'memory', '1024'),
+        'memory_overhead' => (int) calagopus_GetOption($params, 'memory_overhead', '0'),
+        'swap'            => (int) calagopus_GetOption($params, 'swap', '0'),
+        'disk'            => (int) calagopus_GetOption($params, 'disk', '10240'),
+    ];
+
+    $ioWeight = calagopus_GetOption($params, 'io_weight');
+    if ($ioWeight !== '') {
+        $limits['io_weight'] = (int) $ioWeight;
+    }
+
+    return $limits;
+}
+
+function calagopus_BuildFeatureLimits(array $params): array
+{
+    $featureLimits = [
+        'allocations' => (int) calagopus_GetOption($params, 'allocations_limit', '1'),
+        'databases'   => (int) calagopus_GetOption($params, 'database_limit', '0'),
+        'backups'     => (int) calagopus_GetOption($params, 'backup_limit', '0'),
+        'schedules'   => (int) calagopus_GetOption($params, 'schedule_limit', '0'),
+    ];
+
+    foreach (calagopus_ParseCustomFeatureLimits(calagopus_GetOption($params, 'custom_feature_limits')) as $key => $value) {
+        $override = calagopus_FindOverride($params, [$key]);
+        if ($override !== null) {
+            if (is_numeric($override)) {
+                $value = (int) $override;
+            } elseif (in_array(strtolower($override), ['true', 'false'], true)) {
+                $value = strtolower($override) === 'true';
+            } else {
+                $value = $override;
+            }
+        }
+        $featureLimits[$key] = $value;
+    }
+
+    return $featureLimits;
+}
+
+/**
+ * Build the egg variable payload: the product's "Egg Variables" textarea
+ * provides the base values, and each egg variable can be overwritten by a
+ * configurable option or custom field named after the variable's display
+ * name or its environment variable name.
+ */
+function calagopus_ResolveVariables(CalagopusAPI $api, array $params, string $nestUuid, string $eggUuid): array
+{
+    $variables = [];
+    foreach (calagopus_ParseVariables(calagopus_GetOption($params, 'variables')) as $variable) {
+        $variables[$variable['env_variable']] = $variable['value'];
+    }
+
+    if ($nestUuid !== '' && $eggUuid !== '') {
+        try {
+            $eggVariables = $api->getEggVariables($nestUuid, $eggUuid);
+        } catch (\Exception $e) {
+            logModuleCall('calagopus', 'ResolveVariables', ['nest_uuid' => $nestUuid, 'egg_uuid' => $eggUuid], $e->getMessage());
+            $eggVariables = [];
+        }
+
+        foreach ($eggVariables as $eggVariable) {
+            $envName = $eggVariable['env_variable'] ?? '';
+            if ($envName === '') {
+                continue;
+            }
+
+            $override = calagopus_FindOverride($params, [$eggVariable['name'] ?? null, $envName]);
+            if ($override !== null) {
+                $variables[$envName] = $override;
+            }
+        }
+    }
+
+    $payload = [];
+    foreach ($variables as $envName => $value) {
+        $payload[] = [
+            'env_variable' => $envName,
+            'value' => $value,
+        ];
+    }
+
+    return $payload;
+}
+
 // ─── Create Account (Provision Server) ────────────────────────────────────────
 
 function calagopus_CreateAccount(array $params): string
 {
     try {
         $api = calagopus_API($params);
+
+        $existingServer = $api->getServerByExternalId((string) $params['serviceid']);
+        if ($existingServer) {
+            return 'Failed to create server because it already exists for this service (UUID: '
+                . ($existingServer['uuid'] ?? 'unknown') . ').';
+        }
 
         $externalUserId = (string) $params['clientsdetails']['userid'];
         $username = calagopus_GenerateUsername($params);
@@ -391,69 +548,44 @@ function calagopus_CreateAccount(array $params): string
             $username
         );
 
-        $nestUuid  = calagopus_Cfg($params, 1);
-        $eggUuid   = calagopus_Cfg($params, 2);
-        $nodeUuid  = calagopus_Cfg($params, 3);
-        $locationUuids = calagopus_Cfg($params, 4);
+        $nestUuid  = calagopus_GetOption($params, 'nest_uuid');
+        $eggUuid   = calagopus_GetOption($params, 'egg_uuid');
+        $nodeUuid  = calagopus_GetOption($params, 'node_uuid');
+        $locationUuids = calagopus_GetOption($params, 'location_uuids');
 
         $egg = $api->getEgg($nestUuid, $eggUuid);
 
-        $dockerImage = calagopus_Cfg($params, 16) ?: (array_values($egg['docker_images'])[0] ?? '');
-        $startup = calagopus_Cfg($params, 17) ?: (isset($egg['startup'])
+        $dockerImage = calagopus_GetOption($params, 'docker_image') ?: (array_values($egg['docker_images'])[0] ?? '');
+        $startup = calagopus_GetOption($params, 'startup_command') ?: (isset($egg['startup'])
             ? $egg['startup'] : (isset($egg['startup_commands']['Default'])
                 ? $egg['startup_commands']['Default']
                 : (array_values($egg['startup_commands'])[0] ?? '')));
 
-        $prefix = calagopus_Cfg($params, 18);
-        $serverName = ($prefix ? $prefix : 'Server-') . $params['serviceid'];
+        $prefix = calagopus_GetOption($params, 'server_name_prefix');
+        $serverName = calagopus_FindOverride($params, ['Server Name', 'server_name'])
+            ?? (($prefix ? $prefix : 'Server-') . $params['serviceid']);
 
-        $featureLimits = [
-            'allocations' => (int) calagopus_Cfg($params, 11, '1'),
-            'databases'   => (int) calagopus_Cfg($params, 12, '0'),
-            'backups'     => (int) calagopus_Cfg($params, 13, '0'),
-            'schedules'   => (int) calagopus_Cfg($params, 14, '0'),
-        ];
-
-        $customLimits = calagopus_ParseCustomFeatureLimits(calagopus_Cfg($params, 15));
-        $featureLimits = array_merge($featureLimits, $customLimits);
-
-        $ioWeightRaw = calagopus_Cfg($params, 10);
-        $ioWeight = $ioWeightRaw !== '' ? (int) $ioWeightRaw : null;
-
-        $pinnedCpusRaw = calagopus_Cfg($params, 25);
-        $pinnedCpus = [];
-        if ($pinnedCpusRaw !== '') {
-            $pinnedCpus = array_map('intval', array_filter(array_map('trim', explode(',', $pinnedCpusRaw)), 'is_numeric'));
-        }
+        $pinnedCpusRaw = calagopus_GetOption($params, 'pinned_cpus');
+        $pinnedCpus = $pinnedCpusRaw !== '' ? calagopus_ParsePinnedCpus($pinnedCpusRaw) : [];
 
         $serverPayload = [
             'owner_uuid' => $user['uuid'],
             'egg_uuid' => $eggUuid,
-            'start_on_completion' => calagopus_Cfg($params, 21, 'on') === 'on',
-            'skip_installer' => calagopus_Cfg($params, 20) === 'on',
+            'start_on_completion' => calagopus_OptionEnabled($params, 'start_on_completion'),
+            'skip_installer' => calagopus_OptionEnabled($params, 'skip_installer'),
             'external_id' => (string) $params['serviceid'],
             'name' => $serverName,
-            'limits' => [
-                'cpu'             => (int) calagopus_Cfg($params, 8, '100'),
-                'memory'          => (int) calagopus_Cfg($params, 5, '1024'),
-                'memory_overhead' => (int) calagopus_Cfg($params, 9, '0'),
-                'swap'            => (int) calagopus_Cfg($params, 6, '0'),
-                'disk'            => (int) calagopus_Cfg($params, 7, '10240'),
-            ],
+            'limits' => calagopus_BuildLimits($params),
             'pinned_cpus' => $pinnedCpus,
             'startup' => $startup,
             'image' => $dockerImage,
-            'hugepages_passthrough_enabled' => calagopus_Cfg($params, 23) === 'on',
-            'kvm_passthrough_enabled' => calagopus_Cfg($params, 24) === 'on',
-            'feature_limits' => $featureLimits,
-            'variables' => calagopus_ParseVariables(calagopus_Cfg($params, 19)),
+            'hugepages_passthrough_enabled' => calagopus_OptionEnabled($params, 'hugepages_passthrough'),
+            'kvm_passthrough_enabled' => calagopus_OptionEnabled($params, 'kvm_passthrough'),
+            'feature_limits' => calagopus_BuildFeatureLimits($params),
+            'variables' => calagopus_ResolveVariables($api, $params, $nestUuid, $eggUuid),
         ];
 
-        if ($ioWeight !== null) {
-            $serverPayload['limits']['io_weight'] = $ioWeight;
-        }
-
-        $backupConfigUuid = calagopus_Cfg($params, 22);
+        $backupConfigUuid = calagopus_GetOption($params, 'backup_configuration_uuid');
         if ($backupConfigUuid) {
             $serverPayload['backup_configuration_uuid'] = $backupConfigUuid;
         }
@@ -567,49 +699,31 @@ function calagopus_ChangePackage(array $params): string
             return 'Server not found.';
         }
 
-        $ioWeightRaw = calagopus_Cfg($params, 10);
-        $ioWeight = $ioWeightRaw !== '' ? (int) $ioWeightRaw : null;
-
-        $featureLimits = [
-            'allocations' => (int) calagopus_Cfg($params, 11, '1'),
-            'databases'   => (int) calagopus_Cfg($params, 12, '0'),
-            'backups'     => (int) calagopus_Cfg($params, 13, '0'),
-            'schedules'   => (int) calagopus_Cfg($params, 14, '0'),
-        ];
-
-        $customLimits = calagopus_ParseCustomFeatureLimits(calagopus_Cfg($params, 15));
-        $featureLimits = array_merge($featureLimits, $customLimits);
-
         $updateData = [
-            'limits' => [
-                'cpu'             => (int) calagopus_Cfg($params, 8, '100'),
-                'memory'          => (int) calagopus_Cfg($params, 5, '1024'),
-                'memory_overhead' => (int) calagopus_Cfg($params, 9, '0'),
-                'swap'            => (int) calagopus_Cfg($params, 6, '0'),
-                'disk'            => (int) calagopus_Cfg($params, 7, '10240'),
-            ],
-            'feature_limits' => $featureLimits,
-            'hugepages_passthrough_enabled' => calagopus_Cfg($params, 23) === 'on',
-            'kvm_passthrough_enabled' => calagopus_Cfg($params, 24) === 'on',
+            'limits' => calagopus_BuildLimits($params),
+            'feature_limits' => calagopus_BuildFeatureLimits($params),
+            'hugepages_passthrough_enabled' => calagopus_OptionEnabled($params, 'hugepages_passthrough'),
+            'kvm_passthrough_enabled' => calagopus_OptionEnabled($params, 'kvm_passthrough'),
         ];
 
-        $pinnedCpusRaw = calagopus_Cfg($params, 25);
+        $pinnedCpusRaw = calagopus_GetOption($params, 'pinned_cpus');
         if ($pinnedCpusRaw !== '') {
-            $updateData['pinned_cpus'] = array_map('intval', array_filter(array_map('trim', explode(',', $pinnedCpusRaw)), 'is_numeric'));
+            $updateData['pinned_cpus'] = calagopus_ParsePinnedCpus($pinnedCpusRaw);
         }
 
-        if ($ioWeight !== null) {
-            $updateData['limits']['io_weight'] = $ioWeight;
-        }
-
-        $dockerImage = calagopus_Cfg($params, 16);
+        $dockerImage = calagopus_GetOption($params, 'docker_image');
         if ($dockerImage) {
             $updateData['image'] = $dockerImage;
         }
 
         $api->updateServer($serverUuid, $updateData);
 
-        $variables = calagopus_ParseVariables(calagopus_Cfg($params, 19));
+        $variables = calagopus_ResolveVariables(
+            $api,
+            $params,
+            calagopus_GetOption($params, 'nest_uuid'),
+            calagopus_GetOption($params, 'egg_uuid')
+        );
         if (!empty($variables)) {
             $api->updateServerVariables($serverUuid, $variables);
         }
@@ -676,6 +790,47 @@ function calagopus_AdminCustomButtonArray(): array
     return [];
 }
 
+/**
+ * Add the "Open in Panel" button to the top-right button group.
+ */
+function calagopus_LoginLink(array $params)
+{
+    if (($params['moduletype'] ?? '') !== 'calagopus') {
+        return;
+    }
+
+    try {
+        $api = calagopus_API($params);
+        $serverUuid = calagopus_GetServerUuid($api, $params);
+        if (!$serverUuid) {
+            return;
+        }
+
+        $panelUrl = $api->getServerUrl($serverUuid);
+
+        $button = '<a class="btn btn-primary text-uppercase"
+                    href="' . htmlspecialchars($panelUrl) . '" target="_blank">
+                    <i class="fas fa-sign-in fa-fw"></i>
+                    Open in Panel
+                  </a>';
+
+        echo '<script>
+            jQuery(document).ready(function($) {
+                var link = `' . $button . '`;
+                // Hide the default WHMCS login link trigger and add our button
+                // to the same top-right button group.
+                $("#btnLoginLinkTrigger").hide();
+                var buttonGroup = $("#btnLoginLinkTrigger").parent();
+                $(buttonGroup).prepend(link);
+            });
+          </script>';
+
+        return $button;
+    } catch (\Exception $e) {
+        // Silently ignore
+    }
+}
+
 function calagopus_AdminServicesTabFields(array $params): array
 {
     try {
@@ -687,7 +842,6 @@ function calagopus_AdminServicesTabFields(array $params): array
         }
 
         $server = $api->getServer($serverUuid);
-        $panelUrl = $api->getServerUrl($serverUuid);
 
         return [
             'Server UUID' => $server['uuid'],
@@ -695,7 +849,6 @@ function calagopus_AdminServicesTabFields(array $params): array
             'Node' => $server['node']['name'] ?? 'N/A',
             'Owner' => ($server['owner']['name_first'] ?? '') . ' ' . ($server['owner']['name_last'] ?? ''),
             'Suspended' => $server['is_suspended'] ? 'Yes' : 'No',
-            'Panel Link' => '<a href="' . htmlspecialchars($panelUrl) . '" target="_blank">Open in Panel</a>',
         ];
     } catch (\Exception $e) {
         return ['Error' => $e->getMessage()];
@@ -703,19 +856,27 @@ function calagopus_AdminServicesTabFields(array $params): array
 }
 
 /**
- * Try to find the server UUID from:
- * 1. Custom fields on the service
- * 2. External ID lookup on the panel
+ * Resolve the UUID of the server that exists on the panel for this service,
+ * or null if none does. external_id (= serviceid) is the primary source of
+ * truth; the custom field UUID is only a fallback and is verified before use.
  */
 function calagopus_GetServerUuid(CalagopusAPI $api, array $params): ?string
 {
-    if (!empty($params['customfields']['Server UUID'])) {
-        return $params['customfields']['Server UUID'];
+    $server = $api->getServerByExternalId((string) $params['serviceid']);
+    if (!empty($server['uuid'])) {
+        return $server['uuid'];
     }
 
-    // Fallback: look up by external ID
-    $externalId = (string) $params['serviceid'];
-    $server = $api->getServerByExternalId($externalId);
+    if (!empty($params['customfields']['Server UUID'])) {
+        try {
+            $server = $api->getServer((string) $params['customfields']['Server UUID']);
+            if (!empty($server['uuid'])) {
+                return $server['uuid'];
+            }
+        } catch (\Exception $e) {
+            // Stale or missing.
+        }
+    }
 
-    return $server['uuid'] ?? null;
+    return null;
 }

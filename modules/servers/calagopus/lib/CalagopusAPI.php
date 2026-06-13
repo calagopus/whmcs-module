@@ -186,13 +186,13 @@ class CalagopusAPI
                 'language' => 'en',
             ]);
         } catch (\Exception $e) {
-            // Only handle 409 conflicts — rethrow anything else
+            // Only handle 409 conflicts - rethrow anything else
             if (!str_contains($e->getMessage(), '409')) {
                 throw $e;
             }
         }
 
-        // 3. User already exists on the panel — find them by email
+        // 3. User already exists on the panel - find them by email
         $matches = $this->searchUsers($email);
         $matched = null;
 
