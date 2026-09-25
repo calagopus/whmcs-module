@@ -844,14 +844,14 @@ function calagopus_AdminServicesTabFields(array $params): array
         $server = $api->getServer($serverUuid);
 
         return [
-            'Server UUID' => $server['uuid'],
-            'Server Name' => $server['name'],
-            'Node' => $server['node']['name'] ?? 'N/A',
-            'Owner' => ($server['owner']['name_first'] ?? '') . ' ' . ($server['owner']['name_last'] ?? ''),
+            'Server UUID' => htmlspecialchars($server['uuid']),
+            'Server Name' => htmlspecialchars($server['name']),
+            'Node' => htmlspecialchars($server['node']['name'] ?? 'N/A'),
+            'Owner' => htmlspecialchars(($server['owner']['name_first'] ?? '') . ' ' . ($server['owner']['name_last'] ?? '')),
             'Suspended' => $server['is_suspended'] ? 'Yes' : 'No',
         ];
     } catch (\Exception $e) {
-        return ['Error' => $e->getMessage()];
+        return ['Error' => htmlspecialchars($e->getMessage())];
     }
 }
 

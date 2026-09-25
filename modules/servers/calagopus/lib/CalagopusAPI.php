@@ -161,9 +161,9 @@ class CalagopusAPI
     /**
      * Find or create a user, keyed by external ID.
      *
-     * Handles the case where a user with the same email/username already
-     * exists on the panel (409 conflict) by searching for the existing
-     * user and linking them via external_id.
+     * Handles the case where a user with the same email already exists on
+     * the panel (409 conflict) by searching for the existing user and
+     * linking them via external_id. Username-only conflicts are not linked.
      */
     public function findOrCreateUser(string $externalId, string $email, string $firstName, string $lastName, string $username): array
     {
@@ -203,22 +203,11 @@ class CalagopusAPI
             }
         }
 
-        // 4. If no email match, try by username
         if (!$matched) {
-            $matches = $this->searchUsers($username);
-            foreach ($matches as $user) {
-                if (strcasecmp($user['username'] ?? '', $username) === 0) {
-                    $matched = $user;
-                    break;
-                }
-            }
+            throw new \Exception('A panel user with this username already exists and was not linked automatically. Verify that it belongs to this client before linking it manually.');
         }
 
-        if (!$matched) {
-            throw new \Exception('User with this email/username already exists on the panel but could not be found via search.');
-        }
-
-        // 5. Link the existing panel user to this billing account by setting external_id
+        // 4. Link the existing panel user to this billing account by setting external_id
         $this->updateUser($matched['uuid'], [
             'external_id' => $externalId,
         ]);
