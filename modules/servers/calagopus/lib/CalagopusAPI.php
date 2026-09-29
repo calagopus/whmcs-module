@@ -394,6 +394,15 @@ class CalagopusAPI
     }
 
     /**
+     * Live power state and usage of every server on a node, keyed by server UUID (cached ~15s by the panel).
+     */
+    public function getNodeServerResources(string $nodeUuid): array
+    {
+        $response = $this->get('/api/admin/nodes/' . $nodeUuid . '/servers/resources');
+        return $response['resources'] ?? [];
+    }
+
+    /**
      * Get the panel URL for a server (for "Go to Server" button).
      */
     public function getServerUrl(string $serverUuid): string

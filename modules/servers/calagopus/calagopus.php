@@ -735,54 +735,202 @@ function calagopus_ChangePackage(array $params): string
     }
 }
 
-function calagopus_ClientArea(array $params): string
+function calagopus_ClientArea(array $params): array
 {
+    $vars = [
+        'server' => null,
+        'panelUrl' => null,
+        'error' => null,
+    ];
+
     try {
         $api = calagopus_API($params);
         $serverUuid = calagopus_GetServerUuid($api, $params);
 
-        if (!$serverUuid) {
-            return '<p>Server information not available.</p>';
+        if ($serverUuid) {
+            $server = $api->getServer($serverUuid);
+            $usage = calagopus_GetServerUsage($api, $server);
+
+            $vars['panelUrl'] = $api->getServerUrl($serverUuid);
+            $vars['server'] = [
+                'name' => $server['name'] ?? '',
+                'egg' => $server['egg']['name'] ?? '',
+                'nest' => $server['nest']['name'] ?? '',
+                'location' => $server['node']['location']['name'] ?? '',
+                'address' => calagopus_FormatAddress($server['allocation'] ?? null),
+                'state' => calagopus_DescribeState($server, $usage),
+                'resources' => calagopus_DescribeResources($server['limits'] ?? [], $usage),
+                'uptime' => ($usage['state'] ?? null) === 'running' ? calagopus_FormatUptime((int) ($usage['uptime'] ?? 0)) : null,
+                'includes' => calagopus_DescribeIncludes($server['feature_limits'] ?? []),
+            ];
         }
-
-        $server = $api->getServer($serverUuid);
-        $panelUrl = $api->getServerUrl($serverUuid);
-
-        $serverName = htmlspecialchars($server['name'] ?? 'N/A');
-        $status = htmlspecialchars($server['status'] ?? ($server['is_suspended'] ? 'Suspended' : 'Active'));
-        $ip = 'N/A';
-        $port = '';
-
-        if (!empty($server['allocation'])) {
-            $ipAlias = $server['allocation']['ip_alias'] ?? $server['allocation']['ip'] ?? '';
-            $port = $server['allocation']['port'] ?? '';
-            $ip = htmlspecialchars($ipAlias . ':' . $port);
-        }
-
-        $memoryMb = $server['limits']['memory'] ?? 0;
-        $diskMb = $server['limits']['disk'] ?? 0;
-        $cpuPct = $server['limits']['cpu'] ?? 0;
-
-        return '
-        <div class="calagopus-client-area" style="font-family: sans-serif;">
-            <h3 style="margin-bottom: 15px;">Calagopus Server</h3>
-            <table class="table table-bordered" style="max-width: 500px;">
-                <tr><td><strong>Server Name</strong></td><td>' . $serverName . '</td></tr>
-                <tr><td><strong>Status</strong></td><td>' . $status . '</td></tr>
-                <tr><td><strong>Address</strong></td><td>' . $ip . '</td></tr>
-                <tr><td><strong>Memory</strong></td><td>' . $memoryMb . ' MB</td></tr>
-                <tr><td><strong>Disk</strong></td><td>' . $diskMb . ' MB</td></tr>
-                <tr><td><strong>CPU</strong></td><td>' . $cpuPct . '%</td></tr>
-            </table>
-            <a href="' . htmlspecialchars($panelUrl) . '" target="_blank"
-               class="btn btn-primary"
-               style="display: inline-block; margin-top: 10px; padding: 8px 20px; background: #4f46e5; color: #fff; text-decoration: none; border-radius: 6px;">
-                Go to Server Panel &rarr;
-            </a>
-        </div>';
     } catch (\Exception $e) {
-        return '<p>Error loading server info: ' . htmlspecialchars($e->getMessage()) . '</p>';
+        logModuleCall('calagopus', __FUNCTION__, ['serviceid' => $params['serviceid']], $e->getMessage(), $e->getTraceAsString());
+        $vars['error'] = 'Unable to load server information from the panel.';
     }
+
+    return [
+        'tabOverviewModuleOutputTemplate' => 'templates/clientarea.tpl',
+        'templateVariables' => $vars,
+    ];
+}
+
+/**
+ * Live power state and usage of the server from Wings, or null if the node can't be reached.
+ */
+function calagopus_GetServerUsage(CalagopusAPI $api, array $server): ?array
+{
+    if (empty($server['node']['uuid']) || empty($server['uuid'])) {
+        return null;
+    }
+
+    try {
+        return $api->getNodeServerResources($server['node']['uuid'])[$server['uuid']] ?? null;
+    } catch (\Exception $e) {
+        return null;
+    }
+}
+
+/**
+ * The server state the panel shows its owner, in the panel's order of precedence:
+ * suspended, transferring, node maintenance, install/restore state, then the live power state.
+ */
+function calagopus_DescribeState(array $server, ?array $usage): ?array
+{
+    $installStates = [
+        'installing' => ['Installing', 'info'],
+        'install_failed' => ['Install Failed', 'danger'],
+        'restoring_backup' => ['Restoring Backup', 'warning'],
+        'backup_restore_failed' => ['Backup Restore Failed', 'danger'],
+    ];
+    $powerStates = [
+        'running' => ['Running', 'success'],
+        'starting' => ['Starting', 'warning'],
+        'stopping' => ['Stopping', 'warning'],
+        'offline' => ['Offline', 'secondary'],
+    ];
+
+    $state = match (true) {
+        !empty($server['is_suspended']) => ['Suspended', 'danger'],
+        !empty($server['is_transferring']) => ['Transferring', 'info'],
+        !empty($server['node']['maintenance_enabled']) => ['Node Maintenance', 'danger'],
+        isset($installStates[$server['status'] ?? '']) => $installStates[$server['status']],
+        isset($powerStates[$usage['state'] ?? '']) => $powerStates[$usage['state']],
+        default => null,
+    };
+
+    return $state === null ? null : ['label' => $state[0], 'color' => $state[1]];
+}
+
+/**
+ * Memory, disk and CPU as "used" (live, if known) and "limit" display strings, plus the used
+ * percentage when both are known. Memory and CPU use only count while the server is up; disk
+ * use is shown whatever the power state.
+ */
+function calagopus_DescribeResources(array $limits, ?array $usage): array
+{
+    $isUp = in_array($usage['state'] ?? null, ['running', 'starting', 'stopping'], true);
+    $formatBytes = fn (float $v): string => calagopus_FormatBytes($v);
+
+    $resources = [
+        'Memory' => [(int) ($limits['memory'] ?? 0) * 1048576, $isUp && isset($usage['memory_bytes']) ? (int) $usage['memory_bytes'] : null, $formatBytes],
+        'Disk' => [(int) ($limits['disk'] ?? 0) * 1048576, isset($usage['disk_bytes']) ? (int) $usage['disk_bytes'] : null, $formatBytes],
+        'CPU' => [(int) ($limits['cpu'] ?? 0), $isUp && isset($usage['cpu_absolute']) ? (float) $usage['cpu_absolute'] : null, fn (float $v): string => round($v, 1) . '%'],
+    ];
+
+    // Unknown values are left out rather than set to null, as WHMCS passes null template variables as "".
+    $result = [];
+    foreach ($resources as $label => [$limit, $used, $format]) {
+        $result[$label] = ['limit' => $limit > 0 ? $format($limit) : 'Unlimited'];
+        if ($used !== null) {
+            $result[$label]['used'] = $format($used);
+            if ($limit > 0) {
+                $result[$label]['percent'] = (int) min(100, round($used / $limit * 100));
+            }
+        }
+    }
+
+    return $result;
+}
+
+/**
+ * The primary allocation as host:port, preferring the alias like the panel does. IPv6 hosts
+ * are bracketed so the result can be pasted into a game client.
+ */
+/**
+ * Feature limits as label/value pairs: the built-in ones first, then any numeric limit an
+ * extension adds, labelled from its key since the panel has no display names for them.
+ */
+function calagopus_DescribeIncludes(array $featureLimits): array
+{
+    $builtIn = [
+        'databases' => 'Databases',
+        'backups' => 'Backups',
+        'allocations' => 'Ports',
+        'schedules' => 'Schedules',
+    ];
+
+    $includes = [];
+    foreach ($builtIn as $key => $label) {
+        $includes[] = ['label' => $label, 'value' => (int) ($featureLimits[$key] ?? 0)];
+    }
+
+    foreach ($featureLimits as $key => $value) {
+        if (!isset($builtIn[$key]) && (is_int($value) || is_float($value))) {
+            $includes[] = ['label' => calagopus_HumanizeKey((string) $key), 'value' => $value];
+        }
+    }
+
+    return $includes;
+}
+
+/**
+ * "max_players", "max-players" and "maxPlayers" all become "Max players".
+ */
+function calagopus_HumanizeKey(string $key): string
+{
+    $words = preg_replace(['/([a-z\d])([A-Z])/', '/([A-Z]+)([A-Z][a-z])/', '/[_\-\s]+/'], ['$1 $2', '$1 $2', ' '], $key);
+
+    return ucfirst(strtolower(trim($words)));
+}
+
+function calagopus_FormatAddress(?array $allocation): ?string
+{
+    if (empty($allocation)) {
+        return null;
+    }
+
+    $host = ($allocation['ip_alias'] ?? '') ?: ($allocation['ip'] ?? '');
+    if (str_contains($host, ':')) {
+        $host = '[' . $host . ']';
+    }
+
+    return $host . ':' . ($allocation['port'] ?? '');
+}
+
+function calagopus_FormatBytes(float $bytes): string
+{
+    $units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+    $i = 0;
+    while ($bytes >= 1024 && $i < count($units) - 1) {
+        $bytes /= 1024;
+        ++$i;
+    }
+
+    return rtrim(rtrim(number_format($bytes, 2, '.', ''), '0'), '.') . ' ' . $units[$i];
+}
+
+function calagopus_FormatUptime(int $milliseconds): string
+{
+    $minutes = intdiv($milliseconds, 60000);
+    $days = intdiv($minutes, 1440);
+    $hours = intdiv($minutes % 1440, 60);
+
+    return match (true) {
+        $days > 0 => sprintf('%dd %dh', $days, $hours),
+        $hours > 0 => sprintf('%dh %dm', $hours, $minutes % 60),
+        default => sprintf('%dm', $minutes),
+    };
 }
 
 function calagopus_AdminCustomButtonArray(): array
