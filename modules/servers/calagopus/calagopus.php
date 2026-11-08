@@ -621,6 +621,9 @@ function calagopus_CreateAccount(array $params): string
                     'Server UUID' => $server['uuid'],
                     'Server ID' => $server['uuid_short'] ?? '',
                 ])),
+                // WHMCS generates a hosting username/password for every service and puts it here
+                // but its not used for calagopus so i just remove it
+                'unset' => ['serviceusername', 'servicepassword'],
             ];
             localAPI($command, $values);
         } catch (\Exception $e) {
