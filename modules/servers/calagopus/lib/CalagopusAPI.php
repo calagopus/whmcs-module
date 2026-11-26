@@ -159,6 +159,43 @@ class CalagopusAPI
     }
 
     /**
+     * Delete a user by UUID. The panel refuses this while the user still owns servers.
+     */
+    public function deleteUser(string $userUuid): array
+    {
+        return $this->delete('/api/admin/users/' . $userUuid);
+    }
+
+    /**
+     * List every server owned by a user (subuser access is not included).
+     */
+    public function getUserOwnedServers(string $userUuid): array
+    {
+        $servers = [];
+
+        for ($page = 1; $page <= 50; $page++) {
+            $response = $this->get('/api/admin/users/' . $userUuid . '/servers', [
+                'owned' => 'true',
+                'page' => $page,
+                'per_page' => 100,
+            ]);
+            $data = $response['servers']['data'] ?? [];
+
+            if (empty($data)) {
+                break;
+            }
+
+            array_push($servers, ...$data);
+
+            if (isset($response['servers']['total']) && count($servers) >= (int) $response['servers']['total']) {
+                break;
+            }
+        }
+
+        return $servers;
+    }
+
+    /**
      * Find or create a user, keyed by external ID.
      *
      * Handles the case where a user with the same email already exists on

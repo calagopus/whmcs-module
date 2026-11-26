@@ -1,9 +1,9 @@
 <div class="calagopus-server text-left">
     <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
         <div class="mb-2">
-            <h3 class="mb-1">{if $server}{$server.name|escape}{else}Server Details{/if}</h3>
+            <h3 class="mb-1 text-break">{if $server}{$server.name|escape}{else}Server Details{/if}</h3>
             {if $server && $server.egg}
-                <span class="text-muted small">{$server.egg|escape}{if $server.nest} &middot; {$server.nest|escape}{/if}</span>
+                <span class="text-muted small text-break">{$server.egg|escape}{if $server.nest} &middot; {$server.nest|escape}{/if}</span>
             {/if}
         </div>
         <div class="d-flex align-items-center mb-2">
@@ -25,8 +25,8 @@
             <dt class="col-sm-3 text-muted">Address</dt>
             <dd class="col-sm-9">
                 {if $server.address}
-                    <span class="text-monospace">{$server.address|escape}</span>
-                    <button type="button" class="btn btn-outline-secondary btn-sm py-0 ml-2" data-calagopus-copy="{$server.address|escape}">Copy</button>
+                    <span class="text-monospace text-break mr-2">{$server.address|escape}</span>
+                    <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-calagopus-copy="{$server.address|escape}">Copy</button>
                 {else}
                     <span class="text-muted">No address assigned</span>
                 {/if}
@@ -34,7 +34,7 @@
 
             {if $server.location}
                 <dt class="col-sm-3 text-muted">Location</dt>
-                <dd class="col-sm-9">{$server.location|escape}</dd>
+                <dd class="col-sm-9 text-break">{$server.location|escape}</dd>
             {/if}
 
             {if $server.uptime}

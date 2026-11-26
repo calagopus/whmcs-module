@@ -23,6 +23,25 @@
 
 4. Create a **Product** and set the module to "Calagopus", then configure the product options.
 
+## Server Options
+
+WHMCS has no custom per-server settings for provisioning modules, so server
+options are set in the server's **Access Hash** field, one `key=value` per
+line. Values of `on`, `1`, `yes` or `true` enable an option; options are off
+by default.
+
+| Key | Purpose |
+| --- | --- |
+| `delete_users_on_delete` | When a client is deleted in WHMCS, also delete the linked panel user (matched by external ID) and every server they own on this panel. |
+
+WHMCS only detects the module's `hooks.php` when the module is activated. If
+you upgrade from a version without it, open the **Module Settings** tab of a
+Calagopus product and click **Save Changes** once.
+
+Failures are written to the module log (**System Logs → Module Log**, which
+only records entries while Module Debug Mode is enabled); the WHMCS client is
+deleted either way.
+
 ## Overwriting Values Through Configurable Options
 
 Every module setting can be overwritten per service through WHMCS
